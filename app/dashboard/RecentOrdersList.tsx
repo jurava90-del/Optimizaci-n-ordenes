@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
+import { createClient } from '@/utils/supabase/client';
 import Link from 'next/link';
-import { getOrdenesFabricacion, type OrdenFabricacion } from '@/lib/services/productionService';
+import { getOrdenesFabricacion, getHDTMueblesBySkuDescription, type OrdenFabricacion, type HDTMueble } from '@/lib/services/productionService';
 import styles from './dashboard.module.css';
 
 export default function RecentOrdersList() {
     const [orders, setOrders] = useState<OrdenFabricacion[]>([]);
+    const [skuPieces, setSkuPieces] = useState<{ [key: string]: HDTMueble[] }>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -15,12 +17,35 @@ export default function RecentOrdersList() {
     const [selectedMonth, setSelectedMonth] = useState('All');
     const [selectedDay, setSelectedDay] = useState('All');
 
+    const getCleanDescription = (desc: string) => {
+        const parts = desc.trim().split(' ');
+        if (parts.length > 1) {
+            parts.pop(); // Remove the color
+        }
+        return parts.join(' ').trim();
+    };
+
     useEffect(() => {
         async function fetchAll() {
             try {
                 setLoading(true);
-                const data = await getOrdenesFabricacion();
-                setOrders(data);
+                const ordersData = await getOrdenesFabricacion();
+                setOrders(ordersData);
+
+                // Fetch pieces for each unique cleaned product description
+                const cleanDescriptions = Array.from(new Set(ordersData.map(o => getCleanDescription(o.producto_descripcion))));
+                const piecesMap: { [key: string]: HDTMueble[] } = {};
+
+                await Promise.all(cleanDescriptions.map(async (desc) => {
+                    const supabase = createClient();
+                    const { data: pieces } = await supabase
+                        .from('HDT_MUEBLES')
+                        .select('*')
+                        .ilike('DESCRIPCION SKU', desc);
+                    piecesMap[desc] = pieces || [];
+                }));
+
+                setSkuPieces(piecesMap);
                 setError(null);
             } catch (err) {
                 console.error('Error fetching dashboard orders:', err);
@@ -31,6 +56,26 @@ export default function RecentOrdersList() {
         }
         fetchAll();
     }, []);
+
+    const calculateArea = (order: OrdenFabricacion) => {
+        const cleanDesc = getCleanDescription(order.producto_descripcion);
+        // Find match using cleaned description
+        const descMatch = Object.keys(skuPieces).find(
+            key => key.toLowerCase().trim() === cleanDesc.toLowerCase()
+        );
+        const pieces = descMatch ? skuPieces[descMatch] : [];
+        if (pieces.length === 0) return 0;
+
+        const totalAreaPerUnit = pieces.reduce((sum, piece) => {
+            const largo = parseFloat(piece.LARGO || '0');
+            const ancho = parseFloat(piece.ANCHO || '0');
+            const cant = parseFloat(piece.CANTIDAD || '0');
+            // Assume dimensions are in mm, area in m2
+            return sum + (largo * ancho * cant) / 1000000;
+        }, 0);
+
+        return totalAreaPerUnit * order.cantidad;
+    };
 
     const groupedOrders = useMemo(() => {
         const filtered = orders.filter(item => {
@@ -112,18 +157,33 @@ export default function RecentOrdersList() {
                                 Color: {groupedOrders[suffix].colorName} (SKU: {suffix})
                                 <span className={styles.groupCount}>[{groupedOrders[suffix].items.length}]</span>
                             </h3>
-                            {groupedOrders[suffix].items.map((order) => (
-                                <div key={order.id} className={styles.activityItem}>
-                                    <div className={styles.activityIcon}>🛠️</div>
-                                    <div className={styles.activityDetails}>
-                                        <p>
-                                            <strong>{order.orden_fabricacion}</strong> - {order.producto_descripcion}
-                                            <span className={styles.skuInline}> ({order.producto_sku})</span>
-                                        </p>
-                                        <span>{order.planta} | Cant: {order.cantidad} | {new Date(order.created_at).toLocaleDateString()}</span>
+                            {groupedOrders[suffix].items.map((order) => {
+                                const areaValue = calculateArea(order);
+                                return (
+                                    <div key={order.id} className={styles.activityItem}>
+                                        <div className={styles.activityIcon}>🛠️</div>
+                                        <div className={styles.activityDetails}>
+                                            <div className={styles.orderHeaderRow}>
+                                                <p>
+                                                    <strong>{order.orden_fabricacion}</strong> - {getCleanDescription(order.producto_descripcion)}
+                                                    {areaValue > 0 && (
+                                                        <span className={styles.areaBadgeInline}>
+                                                            {areaValue.toFixed(2)} m²
+                                                        </span>
+                                                    )}
+                                                    <span className={styles.skuInline}> ({order.producto_sku})</span>
+                                                </p>
+                                            </div>
+                                            <span>{order.planta} | Cant: {order.cantidad} | {new Date(order.created_at).toLocaleDateString()}</span>
+                                            {skuPieces[getCleanDescription(order.producto_descripcion)] && skuPieces[getCleanDescription(order.producto_descripcion)].length > 0 && (
+                                                <div className={styles.piecesInfo}>
+                                                    <small>Relacionado con {skuPieces[getCleanDescription(order.producto_descripcion)].length} piezas en HDT_MUEBLES</small>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     ))
                 ) : (

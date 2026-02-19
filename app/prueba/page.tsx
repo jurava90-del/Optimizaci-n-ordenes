@@ -1,142 +1,187 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import * as XLSX from 'xlsx';
+import { createClient } from '@/utils/supabase/client';
+import { getOrdenesFabricacion, type OrdenFabricacion, type HDTMueble } from '@/lib/services/productionService';
 import styles from '../dashboard/dashboard.module.css';
 
-const EXCEL_FILES = [
-    {
-        name: 'Soporte Sup',
-        url: 'https://vuiuorjzonpyobpelyld.supabase.co/storage/v1/object/public/HDT/Muebles%20GODAI%20de%2063x48/HOJA%20DE%20RUTA%20%20SOPORTE%20SUP%20MUEBLE%20GODAI%2063x48.xlsx'
-    },
-    {
-        name: 'Cubo',
-        url: 'https://vuiuorjzonpyobpelyld.supabase.co/storage/v1/object/public/HDT/Muebles%20GODAI%20de%2063x48/HOJA%20DE%20RUTA%20CUBO%20MUEBLE%20GODAI%20DE%2063x48.xlsx'
-    },
-    {
-        name: 'Cubo+Cajón',
-        url: 'https://vuiuorjzonpyobpelyld.supabase.co/storage/v1/object/public/HDT/Muebles%20GODAI%20de%2063x48/HOJA%20DE%20RUTA%20CUBO%2BCAJON%20MUEBLE%20GODAI%2063x48.xlsx'
-    },
-    {
-        name: 'Mueble',
-        url: 'https://vuiuorjzonpyobpelyld.supabase.co/storage/v1/object/public/HDT/Muebles%20GODAI%20de%2063x48/HOJA%20DE%20RUTA%20MUEBLE%20SOPORTE%20SUP%20+%20ESTRUCTURA%20%20GODAI%2063x48.xlsx'
-    }
-];
-
-const ALLOWED_COLUMNS = ['ancho', 'largo', 'pieza', 'letra'];
-
 export default function PruebaPage() {
-    const [selectedFileIndex, setSelectedFileIndex] = useState(0);
-    const [data, setData] = useState<any[]>([]);
+    const [orders, setOrders] = useState<OrdenFabricacion[]>([]);
+    const [skuPieces, setSkuPieces] = useState<{ [key: string]: HDTMueble[] }>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+
+    const getColorCode = (desc: string) => {
+        // Handle descriptions like "TABLERO COMPUESTO - WSM303614-18MM"
+        const parts = desc.split(' - ');
+        if (parts.length > 1) {
+            return parts[parts.length - 1].trim();
+        }
+        // Fallback to last word if no " - " separator
+        const lastWordParts = desc.trim().split(' ');
+        return lastWordParts.length > 0 ? lastWordParts[lastWordParts.length - 1] : '';
+    };
 
     useEffect(() => {
-        async function fetchAndParseExcel() {
+        async function fetchFilteredOrders() {
             try {
                 setLoading(true);
-                const response = await fetch(EXCEL_FILES[selectedFileIndex].url);
-                if (!response.ok) throw new Error(`No se pudo descargar el archivo: ${EXCEL_FILES[selectedFileIndex].name}`);
+                const allOrders = await getOrdenesFabricacion();
 
-                const arrayBuffer = await response.arrayBuffer();
-                const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+                const filtered = allOrders.filter(order => {
+                    const orderDateStr = new Date(order.created_at).toISOString().split('T')[0];
+                    const isSameDay = orderDateStr === selectedDate;
+                    const isCefiPlant = order.planta === 'Cefi';
+                    return isSameDay && isCefiPlant;
+                });
 
-                const firstSheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[firstSheetName];
+                setOrders(filtered);
 
-                // Read as raw arrays to find the header row
-                const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                if (filtered.length > 0) {
+                    const colorCodes = Array.from(new Set(filtered.map(o => getColorCode(o.producto_descripcion))));
+                    const piecesMap: { [key: string]: HDTMueble[] } = {};
+                    const supabase = createClient();
 
-                // Find the first row that contains at least one of our keywords
-                let headerIndex = rawRows.findIndex(row =>
-                    row && row.some(cell =>
-                        typeof cell === 'string' &&
-                        ALLOWED_COLUMNS.some(keyword => cell.toLowerCase().includes(keyword))
-                    )
-                );
+                    await Promise.all(colorCodes.map(async (code) => {
+                        if (!code) return;
 
-                if (headerIndex === -1) headerIndex = 0; // Fallback
+                        // Use correctly formatted column name 'DESCRIPCION_SKU'
+                        const { data: pieces } = await supabase
+                            .from('HDT_MUEBLES')
+                            .select('*')
+                            .ilike('DESCRIPCION_SKU', `%${code}%`);
 
-                // Convert to JSON using the found header row
-                const jsonData = XLSX.utils.sheet_to_json(worksheet, { range: headerIndex });
-                setData(jsonData);
+                        piecesMap[code] = pieces || [];
+                    }));
+                    setSkuPieces(piecesMap);
+                }
+
                 setError(null);
-            } catch (err: any) {
-                console.error('Error processing Excel:', err);
-                setError(`Error al leer "${EXCEL_FILES[selectedFileIndex].name}". Por favor verifica la URL.`);
+            } catch (err) {
+                console.error('Error fetching orders:', err);
+                setError('Error al cargar las órdenes.');
             } finally {
                 setLoading(false);
             }
         }
+        fetchFilteredOrders();
+    }, [selectedDate]);
 
-        fetchAndParseExcel();
-    }, [selectedFileIndex]);
+    const calculateArea = (order: OrdenFabricacion) => {
+        const code = getColorCode(order.producto_descripcion);
+        const pieces = skuPieces[code] || [];
+        if (pieces.length === 0) return 0;
 
-    const filteredKeys = useMemo(() => {
-        if (data.length === 0) return [];
-        const allKeys = Object.keys(data[0]);
-        return allKeys.filter(key =>
-            ALLOWED_COLUMNS.some(allowed => key.toLowerCase().includes(allowed))
-        );
-    }, [data]);
+        const sumLargo = pieces.reduce((sum, piece) => sum + parseFloat(piece.LARGO || '0'), 0);
+        const sumAncho = pieces.reduce((sum, piece) => sum + parseFloat(piece.ANCHO || '0'), 0);
+
+        return (sumLargo * sumAncho * order.cantidad) / 1000000;
+    };
 
     return (
         <div className={styles.dashboardContainer}>
             <header className={styles.navbar} style={{ marginBottom: '2rem' }}>
-                <div className={styles.logo}>Lectura Filtrada - Hojas de Ruta</div>
+                <div className={styles.logo}>Órdenes de Fabricación</div>
+                <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+                    <input
+                        type="date"
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className={styles.dashSelect}
+                        style={{ padding: '8px 16px' }}
+                    />
+                </div>
                 <Link href="/dashboard" className={styles.dashButton}>
                     Volver al Dashboard
                 </Link>
             </header>
 
             <main className={styles.mainContent}>
-                <div className={styles.tabContainer}>
-                    {EXCEL_FILES.map((file, index) => (
-                        <button
-                            key={index}
-                            className={`${styles.tabButton} ${selectedFileIndex === index ? styles.activeTab : ''}`}
-                            onClick={() => setSelectedFileIndex(index)}
-                        >
-                            {file.name}
-                        </button>
-                    ))}
-                </div>
-
                 <div className={styles.statsGrid}>
                     <div className={`${styles.statCard} ${styles.cardIndigo}`}>
-                        <h3>{EXCEL_FILES[selectedFileIndex].name}</h3>
-                        <div className={styles.statValue}>{loading ? '...' : data.length}</div>
-                        <div className={styles.statLabel}>Registros filtrados (Pieza, Letra, Ancho, Largo)</div>
+                        <h3>Órdenes de Fabricación (Cefi)</h3>
+                        <div className={styles.statValue}>{loading ? '...' : orders.length}</div>
+                        <div className={styles.statLabel}>Fecha seleccionada: {new Date(selectedDate + 'T12:00:00').toLocaleDateString()}</div>
                     </div>
                 </div>
 
-                <div className={styles.activityList} style={{ padding: '2rem' }}>
+                <div className={styles.activityList}>
                     {loading ? (
-                        <p className={styles.noData}>Cargando datos de {EXCEL_FILES[selectedFileIndex].name}...</p>
+                        <p className={styles.noData}>Buscando órdenes...</p>
                     ) : error ? (
                         <p className={styles.errorMessage}>{error}</p>
+                    ) : orders.length > 0 ? (
+                        orders.map((order) => {
+                            const code = getColorCode(order.producto_descripcion);
+                            const pieces = skuPieces[code] || [];
+
+                            const sumLargo = pieces.reduce((sum, piece) => sum + parseFloat(piece.LARGO || '0'), 0);
+                            const sumAncho = pieces.reduce((sum, piece) => sum + parseFloat(piece.ANCHO || '0'), 0);
+                            const areaValue = (sumLargo * sumAncho * order.cantidad) / 1000000;
+
+                            return (
+                                <div key={order.id} className={styles.activityItem} style={{ padding: '1rem 2rem', borderBottom: '1px solid #f1f5f9' }}>
+                                    <div className={styles.activityIcon}>📅</div>
+                                    <div className={styles.activityDetails}>
+                                        <div className={styles.orderHeaderRow}>
+                                            <p>
+                                                <strong>{order.orden_fabricacion}</strong> - {order.producto_descripcion}
+                                                <span className={styles.skuInline}> ({order.producto_sku})</span>
+                                            </p>
+                                        </div>
+
+                                        <div className={styles.orderDataGrid}>
+                                            <div className={styles.gridItem}>
+                                                <label>Ancho (Total)</label>
+                                                <span>{pieces.length > 0 ? `${sumAncho.toFixed(2)} mm` : '-'}</span>
+                                            </div>
+                                            <div className={styles.gridItem}>
+                                                <label>Largo (Total)</label>
+                                                <span>{pieces.length > 0 ? `${sumLargo.toFixed(2)} mm` : '-'}</span>
+                                            </div>
+                                            <div className={styles.gridItem}>
+                                                <label>Área</label>
+                                                <span>{areaValue > 0 ? areaValue.toFixed(4) : '-'} m²</span>
+                                            </div>
+                                        </div>
+
+                                        <div style={{ marginTop: '0.75rem' }}>
+                                            <span>{order.planta} | Cant: {order.cantidad} | {new Date(order.created_at).toLocaleTimeString()}</span>
+                                        </div>
+
+                                        {pieces.length > 0 && (
+                                            <div className={styles.piecesBreakdown} style={{ marginTop: '1rem', background: '#f8fafc', padding: '1rem', borderRadius: '8px' }}>
+                                                <p style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#475569' }}>Desglose de Piezas (HDT_MUEBLES):</p>
+                                                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                                                    <thead>
+                                                        <tr style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>
+                                                            <th style={{ padding: '0.5rem 0' }}>Pieza</th>
+                                                            <th style={{ padding: '0.5rem 0' }}>Largo</th>
+                                                            <th style={{ padding: '0.5rem 0' }}>Ancho</th>
+                                                            <th style={{ padding: '0.5rem 0' }}>Cant</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {pieces.map((piece, idx) => (
+                                                            <tr key={idx} style={{ borderBottom: idx === pieces.length - 1 ? 'none' : '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '0.5rem 0' }}>{piece.PIEZA}</td>
+                                                                <td style={{ padding: '0.5rem 0' }}>{piece.LARGO} mm</td>
+                                                                <td style={{ padding: '0.5rem 0' }}>{piece.ANCHO} mm</td>
+                                                                <td style={{ padding: '0.5rem 0' }}>{piece.CANTIDAD}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })
                     ) : (
-                        <div className={styles.excelTableWrapper}>
-                            <table className={styles.excelTable}>
-                                <thead>
-                                    <tr>
-                                        {filteredKeys.map((key) => (
-                                            <th key={key}>{key}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {data.map((row, index) => (
-                                        <tr key={index}>
-                                            {filteredKeys.map((key, i) => (
-                                                <td key={i}>{row[key] || '-'}</td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                        <p className={styles.noData}>No hay órdenes registradas para la fecha seleccionada.</p>
                     )}
                 </div>
             </main>
