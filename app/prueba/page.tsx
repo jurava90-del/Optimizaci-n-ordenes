@@ -74,10 +74,14 @@ export default function PruebaPage() {
         const pieces = skuPieces[code] || [];
         if (pieces.length === 0) return 0;
 
-        const sumLargo = pieces.reduce((sum, piece) => sum + parseFloat(piece.LARGO || '0'), 0);
-        const sumAncho = pieces.reduce((sum, piece) => sum + parseFloat(piece.ANCHO || '0'), 0);
+        const areaPerUnit = pieces.reduce((sum, piece) => {
+            const largo = parseFloat((piece as any).LARGO?.toString().replace(',', '.') || '0');
+            const ancho = parseFloat((piece as any).ANCHO?.toString().replace(',', '.') || '0');
+            const cant = parseFloat((piece as any).CANTIDAD?.toString().replace(',', '.') || '1');
+            return sum + (largo * ancho * cant);
+        }, 0);
 
-        return (sumLargo * sumAncho * order.cantidad) / 1000000;
+        return (areaPerUnit * order.cantidad) / 1000000;
     };
 
     return (
@@ -134,16 +138,20 @@ export default function PruebaPage() {
 
                                         <div className={styles.orderDataGrid}>
                                             <div className={styles.gridItem}>
+                                                <label>Descripción</label>
+                                                <span>{pieces.length > 0 ? (pieces[0] as any)["DESCRIPCION_SKU"] : code || '-'}</span>
+                                            </div>
+                                            <div className={styles.gridItem}>
                                                 <label>Ancho (Total)</label>
-                                                <span>{pieces.length > 0 ? `${sumAncho.toFixed(2)} mm` : '-'}</span>
+                                                <span>{pieces.length > 0 ? (pieces.reduce((sum, p) => sum + parseFloat((p as any).ANCHO?.toString().replace(',', '.') || '0'), 0)).toFixed(2) : '-'} mm</span>
                                             </div>
                                             <div className={styles.gridItem}>
                                                 <label>Largo (Total)</label>
-                                                <span>{pieces.length > 0 ? `${sumLargo.toFixed(2)} mm` : '-'}</span>
+                                                <span>{pieces.length > 0 ? (pieces.reduce((sum, p) => sum + parseFloat((p as any).LARGO?.toString().replace(',', '.') || '0'), 0)).toFixed(2) : '-'} mm</span>
                                             </div>
                                             <div className={styles.gridItem}>
                                                 <label>Área</label>
-                                                <span>{areaValue > 0 ? areaValue.toFixed(4) : '-'} m²</span>
+                                                <span>{calculateArea(order) > 0 ? calculateArea(order).toFixed(4) : '-'} m²</span>
                                             </div>
                                         </div>
 
@@ -152,27 +160,36 @@ export default function PruebaPage() {
                                         </div>
 
                                         {pieces.length > 0 && (
-                                            <div className={styles.piecesBreakdown} style={{ marginTop: '1rem', background: '#f8fafc', padding: '1rem', borderRadius: '8px' }}>
-                                                <p style={{ fontSize: '0.875rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#475569' }}>Desglose de Piezas (HDT_MUEBLES):</p>
-                                                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                                            <div className={styles.piecesBreakdown}>
+                                                <p>Desglose de Piezas (HDT_MUEBLES):</p>
+                                                <table className={styles.piecesTable}>
                                                     <thead>
-                                                        <tr style={{ textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>
-                                                            <th style={{ padding: '0.5rem 0' }}>Pieza</th>
-                                                            <th style={{ padding: '0.5rem 0' }}>Largo</th>
-                                                            <th style={{ padding: '0.5rem 0' }}>Ancho</th>
-                                                            <th style={{ padding: '0.5rem 0' }}>Cant</th>
+                                                        <tr>
+                                                            <th>Pieza</th>
+                                                            <th>Largo</th>
+                                                            <th>Ancho</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
                                                         {pieces.map((piece, idx) => (
-                                                            <tr key={idx} style={{ borderBottom: idx === pieces.length - 1 ? 'none' : '1px solid #f1f5f9' }}>
-                                                                <td style={{ padding: '0.5rem 0' }}>{piece.PIEZA}</td>
-                                                                <td style={{ padding: '0.5rem 0' }}>{piece.LARGO} mm</td>
-                                                                <td style={{ padding: '0.5rem 0' }}>{piece.ANCHO} mm</td>
-                                                                <td style={{ padding: '0.5rem 0' }}>{piece.CANTIDAD}</td>
+                                                            <tr key={idx}>
+                                                                <td>{piece.PIEZA}</td>
+                                                                <td>{piece.LARGO} mm</td>
+                                                                <td>{piece.ANCHO} mm</td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
+                                                    <tfoot style={{ borderTop: '2px solid #000000' }}>
+                                                        <tr>
+                                                            <td style={{ color: '#000000', fontWeight: '900', paddingTop: '1rem' }}>TOTAL</td>
+                                                            <td style={{ color: '#000000', fontWeight: '900', paddingTop: '1rem' }}>
+                                                                {pieces.reduce((sum, p) => sum + parseFloat((p as any).LARGO?.toString().replace(',', '.') || '0'), 0).toFixed(2)} mm
+                                                            </td>
+                                                            <td style={{ color: '#000000', fontWeight: '900', paddingTop: '1rem' }}>
+                                                                {pieces.reduce((sum, p) => sum + parseFloat((p as any).ANCHO?.toString().replace(',', '.') || '0'), 0).toFixed(2)} mm
+                                                            </td>
+                                                        </tr>
+                                                    </tfoot>
                                                 </table>
                                             </div>
                                         )}

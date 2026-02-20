@@ -21,7 +21,7 @@ export interface OrdenFabricacion {
 export interface HDTMueble {
   ID: number;
   Created: string | null;
-  "DESCRIPCION SKU": string | null;
+  "DESCRIPCION_SKU": string | null;
   LETRA: string | null;
   PIEZA: string | null;
   LARGO: string | null;
